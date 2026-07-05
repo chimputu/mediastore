@@ -391,55 +391,6 @@ export default function Home() {
     }
   };
 
-  // Test Supabase Connection Function
-  const testSupabaseConnection = async () => {
-    console.log('🧪 Testing Supabase connection...');
-    console.log('👤 Current user:', user);
-    
-    if (!user?.id) {
-      toast.error('No user logged in');
-      return;
-    }
-
-    // Test 1: Check if we can read
-    console.log('📡 Testing SELECT...');
-    const { data: readData, error: readError } = await supabase
-      .from('files')
-      .select('*')
-      .limit(5);
-    
-    console.log('📊 Read result:', readData);
-    console.log('❌ Read error:', readError);
-
-    // Test 2: Check if we can insert
-    console.log('📤 Testing INSERT...');
-    const testData = {
-      user_id: user.id,
-      cloudinary_id: 'test_' + Date.now(),
-      file_name: 'test_file.jpg',
-      file_url: 'https://test.com/test.jpg',
-      file_type: 'image',
-      file_size: 1000,
-      format: 'jpg'
-    };
-    
-    const { data: insertData, error: insertError } = await supabase
-      .from('files')
-      .insert(testData)
-      .select()
-      .single();
-    
-    console.log('📥 Insert result:', insertData);
-    console.log('❌ Insert error:', insertError);
-
-    if (insertError) {
-      toast.error('Insert failed: ' + insertError.message);
-    } else {
-      toast.success('Insert succeeded!');
-      loadUserFiles(); // Reload files
-    }
-  };
-
   const tabs = [
     { id: 'all', label: 'All', icon: FolderOpen },
     { id: 'videos', label: 'Videos', icon: Video },

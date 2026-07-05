@@ -11,7 +11,7 @@ console.log('🔍 Supabase Key:', supabaseAnonKey ? '✅ Found' : '❌ Missing')
 const createMockClient = () => {
   console.warn('⚠️ Using mock Supabase client. Data will not be saved!');
   
-  // Helper to create a mock response
+  // Helper to create a mock response that matches Supabase structure
   const mockResponse = (data: any[] = []) => ({
     data: data,
     error: null,
@@ -20,76 +20,127 @@ const createMockClient = () => {
     statusText: 'OK',
   });
 
+  // Helper for single response
+  const mockSingleResponse = (data: any = null) => ({
+    data: data,
+    error: null,
+    status: 200,
+    statusText: 'OK',
+  });
+
   return {
-    from: (table: string) => ({
-      select: (columns: string = '*') => ({
-        eq: (column: string, value: any) => ({
-          order: (orderColumn: string, options: any = { ascending: true }) => {
-            console.warn(`⚠️ Mock: SELECT from ${table} with eq ${column}=${value}`);
-            return Promise.resolve(mockResponse([]));
-          },
-          limit: (count: number) => {
-            console.warn(`⚠️ Mock: SELECT from ${table} with limit ${count}`);
-            return Promise.resolve(mockResponse([]));
-          },
-          range: (start: number, end: number) => {
-            console.warn(`⚠️ Mock: SELECT from ${table} with range ${start}-${end}`);
-            return Promise.resolve(mockResponse([]));
-          },
-          single: () => {
-            console.warn(`⚠️ Mock: SELECT single from ${table}`);
-            return Promise.resolve({ data: null, error: null });
-          },
-        }),
-        limit: (count: number) => {
-          console.warn(`⚠️ Mock: SELECT from ${table} with limit ${count}`);
-          return Promise.resolve(mockResponse([]));
+    from: (table: string) => {
+      console.warn(`⚠️ Mock: from ${table}`);
+      return {
+        select: (columns: string = '*') => {
+          console.warn(`⚠️ Mock: select ${columns} from ${table}`);
+          return {
+            eq: (column: string, value: any) => {
+              console.warn(`⚠️ Mock: eq ${column}=${value}`);
+              return {
+                order: (orderColumn: string, options: any = { ascending: true }) => {
+                  console.warn(`⚠️ Mock: order by ${orderColumn}`);
+                  return Promise.resolve(mockResponse([]));
+                },
+                limit: (count: number) => {
+                  console.warn(`⚠️ Mock: limit ${count}`);
+                  return Promise.resolve(mockResponse([]));
+                },
+                range: (start: number, end: number) => {
+                  console.warn(`⚠️ Mock: range ${start}-${end}`);
+                  return Promise.resolve(mockResponse([]));
+                },
+                single: () => {
+                  console.warn(`⚠️ Mock: single`);
+                  return Promise.resolve(mockSingleResponse(null));
+                },
+                // For when .eq() is used without chain
+                then: (callback: any) => {
+                  return Promise.resolve(mockResponse([])).then(callback);
+                }
+              };
+            },
+            limit: (count: number) => {
+              console.warn(`⚠️ Mock: limit ${count}`);
+              return Promise.resolve(mockResponse([]));
+            },
+            range: (start: number, end: number) => {
+              console.warn(`⚠️ Mock: range ${start}-${end}`);
+              return Promise.resolve(mockResponse([]));
+            },
+            single: () => {
+              console.warn(`⚠️ Mock: single`);
+              return Promise.resolve(mockSingleResponse(null));
+            },
+            order: (orderColumn: string, options: any = { ascending: true }) => {
+              console.warn(`⚠️ Mock: order by ${orderColumn}`);
+              return Promise.resolve(mockResponse([]));
+            },
+            // For when .select() is used without chain
+            then: (callback: any) => {
+              return Promise.resolve(mockResponse([])).then(callback);
+            }
+          };
         },
-        range: (start: number, end: number) => {
-          console.warn(`⚠️ Mock: SELECT from ${table} with range ${start}-${end}`);
-          return Promise.resolve(mockResponse([]));
+        insert: (data: any) => {
+          console.warn(`⚠️ Mock: insert into ${table}`, data);
+          return {
+            select: (columns: string = '*') => {
+              console.warn(`⚠️ Mock: select after insert`);
+              return {
+                single: () => {
+                  console.warn(`⚠️ Mock: single after insert`);
+                  return Promise.resolve(mockSingleResponse({ 
+                    id: 'mock-id-' + Date.now(), 
+                    ...data 
+                  }));
+                },
+                // For when .select().single() is used
+                then: (callback: any) => {
+                  return Promise.resolve(mockSingleResponse({ 
+                    id: 'mock-id-' + Date.now(), 
+                    ...data 
+                  })).then(callback);
+                }
+              };
+            },
+            // For when .insert() is used without .select()
+            then: (callback: any) => {
+              return Promise.resolve(mockSingleResponse({ 
+                id: 'mock-id-' + Date.now(), 
+                ...data 
+              })).then(callback);
+            }
+          };
         },
-        single: () => {
-          console.warn(`⚠️ Mock: SELECT single from ${table}`);
-          return Promise.resolve({ data: null, error: null });
+        update: (data: any) => {
+          console.warn(`⚠️ Mock: update ${table}`, data);
+          return {
+            eq: (column: string, value: any) => {
+              console.warn(`⚠️ Mock: eq ${column}=${value}`);
+              return {
+                then: (callback: any) => {
+                  return Promise.resolve({ data: null, error: null }).then(callback);
+                }
+              };
+            }
+          };
         },
-        order: (orderColumn: string, options: any = { ascending: true }) => {
-          console.warn(`⚠️ Mock: SELECT from ${table} with order ${orderColumn}`);
-          return Promise.resolve(mockResponse([]));
-        },
-      }),
-      insert: (data: any) => ({
-        select: (columns: string = '*') => ({
-          single: () => {
-            console.warn(`⚠️ Mock: INSERT into ${table}`, data);
-            return Promise.resolve({ 
-              data: { id: 'mock-id-' + Date.now(), ...data }, 
-              error: null 
-            });
-          }
-        }),
-        // For when .select().single() is used
-        then: (callback: any) => {
-          console.warn(`⚠️ Mock: INSERT into ${table} (then)`, data);
-          return Promise.resolve({ 
-            data: { id: 'mock-id-' + Date.now(), ...data }, 
-            error: null 
-          }).then(callback);
+        delete: () => {
+          console.warn(`⚠️ Mock: delete from ${table}`);
+          return {
+            eq: (column: string, value: any) => {
+              console.warn(`⚠️ Mock: eq ${column}=${value}`);
+              return {
+                then: (callback: any) => {
+                  return Promise.resolve({ data: null, error: null }).then(callback);
+                }
+              };
+            }
+          };
         }
-      }),
-      update: (data: any) => ({
-        eq: (column: string, value: any) => {
-          console.warn(`⚠️ Mock: UPDATE ${table} set`, data);
-          return Promise.resolve({ data: null, error: null });
-        }
-      }),
-      delete: () => ({
-        eq: (column: string, value: any) => {
-          console.warn(`⚠️ Mock: DELETE from ${table} where ${column}=${value}`);
-          return Promise.resolve({ data: null, error: null });
-        }
-      })
-    })
+      };
+    }
   };
 };
 
