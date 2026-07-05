@@ -24,6 +24,7 @@ interface MediaFile {
   dbId?: string;
 }
 
+// Helper to determine file type from filename/extension
 const getFileTypeFromName = (name: string): 'image' | 'video' | 'audio' | 'other' => {
   const ext = name.split('.').pop()?.toLowerCase() || '';
   const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'];
@@ -32,6 +33,28 @@ const getFileTypeFromName = (name: string): 'image' | 'video' | 'audio' | 'other
   if (imageExts.includes(ext)) return 'image';
   if (videoExts.includes(ext)) return 'video';
   if (audioExts.includes(ext)) return 'audio';
+  return 'other';
+};
+
+// Helper to get file type from URL
+const getFileTypeFromUrl = (url: string): 'image' | 'video' | 'audio' | 'other' => {
+  if (!url) return 'other';
+  const urlLower = url.toLowerCase();
+  if (urlLower.includes('.jpg') || urlLower.includes('.jpeg') || urlLower.includes('.png') || 
+      urlLower.includes('.gif') || urlLower.includes('.webp') || urlLower.includes('.svg') ||
+      urlLower.includes('.bmp') || urlLower.includes('.ico')) {
+    return 'image';
+  }
+  if (urlLower.includes('.mp4') || urlLower.includes('.mov') || urlLower.includes('.webm') || 
+      urlLower.includes('.avi') || urlLower.includes('.mkv') || urlLower.includes('.flv') ||
+      urlLower.includes('.wmv') || urlLower.includes('.m4v')) {
+    return 'video';
+  }
+  if (urlLower.includes('.mp3') || urlLower.includes('.wav') || urlLower.includes('.aac') || 
+      urlLower.includes('.flac') || urlLower.includes('.ogg') || urlLower.includes('.m4a') ||
+      urlLower.includes('.wma') || urlLower.includes('.aiff')) {
+    return 'audio';
+  }
   return 'other';
 };
 
@@ -123,29 +146,39 @@ export default function Home() {
 
       if (error) {
         console.error('❌ Error loading files:', error);
-        if (error.code === '42P01') {
-          toast.error('Table "files" does not exist. Please create it in Supabase.');
-        } else if (error.code === '42501') {
-          toast.error('Permission denied. Please check your RLS policies in Supabase.');
-        } else {
-          toast.error('Failed to load your files');
-        }
+        toast.error('Failed to load your files');
         setMediaFiles([]);
         return;
       }
 
       console.log(`✅ Loaded ${data?.length || 0} files`);
       if (data) {
-        const files: MediaFile[] = data.map((row: any) => ({
-          url: row.file_url || '',
-          type: getFileTypeFromName(row.file_name || ''),
-          name: row.file_name || 'unnamed',
-          id: row.cloudinary_id || row.id || '',
-          size: row.file_size || 0,
-          date: row.uploaded_at || '',
-          format: row.format || '',
-          dbId: row.id || '',
-        }));
+        const files: MediaFile[] = data.map((row: any) => {
+          // Try to get file type from stored type, then URL, then filename
+          let fileType = row.file_type || 'other';
+          
+          // If stored type is not reliable, check URL
+          if (fileType === 'other' || fileType === 'raw') {
+            const urlType = getFileTypeFromUrl(row.file_url || '');
+            if (urlType !== 'other') {
+              fileType = urlType;
+            } else {
+              // Fallback to filename
+              fileType = getFileTypeFromName(row.file_name || '');
+            }
+          }
+          
+          return {
+            url: row.file_url || '',
+            type: fileType,
+            name: row.file_name || 'unnamed',
+            id: row.cloudinary_id || row.id || '',
+            size: row.file_size || 0,
+            date: row.uploaded_at || '',
+            format: row.format || '',
+            dbId: row.id || '',
+          };
+        });
         setMediaFiles(files);
       }
     } catch (err) {
@@ -348,9 +381,28 @@ export default function Home() {
       console.log('📍 File URL:', fileUrl);
 
       const originalName = response.original_filename || file.name.replace(/\.[^.]+$/, '') || 'unnamed';
-      const fileType = getFileTypeFromName(originalName + '.' + format);
+      
+      // Determine file type from the actual file extension
+      const fileExtension = (format || file.name.split('.').pop() || '').toLowerCase();
+      let fileType = 'other';
+      
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'].includes(fileExtension)) {
+        fileType = 'image';
+      } else if (['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'wmv', 'm4v'].includes(fileExtension)) {
+        fileType = 'video';
+      } else if (['mp3', 'wav', 'aac', 'flac', 'ogg', 'm4a', 'wma', 'aiff'].includes(fileExtension)) {
+        fileType = 'audio';
+      }
 
-      // Try to insert into Supabase
+      // Also check MIME type as fallback
+      if (fileType === 'other' && file.type) {
+        if (file.type.startsWith('image/')) fileType = 'image';
+        else if (file.type.startsWith('video/')) fileType = 'video';
+        else if (file.type.startsWith('audio/')) fileType = 'audio';
+      }
+
+      console.log('📋 File type detected:', fileType);
+
       const { data: dbData, error: dbError } = await supabase
         .from('files')
         .insert({
@@ -367,18 +419,8 @@ export default function Home() {
 
       if (dbError) {
         console.error('❌ Supabase insert error:', dbError);
-        
-        // Handle specific Supabase errors
-        if (dbError.code === '42501') {
-          toast.error('Permission denied. Please run the SQL fix in Supabase SQL Editor.');
-          throw new Error('RLS policy violation. Please disable RLS or add proper policies.');
-        } else if (dbError.code === '42P01') {
-          toast.error('Table "files" does not exist. Please create it in Supabase.');
-          throw new Error('Table not found. Please run the create table SQL.');
-        } else {
-          toast.error(`Database error: ${dbError.message}`);
-          throw new Error(dbError.message);
-        }
+        toast.error(`Database error: ${dbError.message}`);
+        throw new Error(dbError.message);
       }
 
       console.log('✅ Supabase insert successful:', dbData);
@@ -399,10 +441,7 @@ export default function Home() {
 
     } catch (err: any) {
       console.error('❌ Upload error:', err);
-      // Only show toast if it's not already shown for specific errors
-      if (!err.message.includes('RLS') && !err.message.includes('Table not found')) {
-        toast.error(`Upload failed: ${err.message || 'Unknown error'}`);
-      }
+      toast.error(`Upload failed: ${err.message || 'Unknown error'}`);
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -540,6 +579,66 @@ export default function Home() {
     );
   };
 
+  // Image Card Component
+  const ImageCard = ({ file }: { file: MediaFile }) => {
+    return (
+      <div className="group cursor-pointer" onClick={() => setSelectedFile(file)}>
+        <div className={`relative rounded-xl overflow-hidden bg-gray-100 ${viewMode === 'grid' ? 'aspect-video' : 'aspect-video max-w-2xl mx-auto'}`}>
+          <img 
+            src={file.url} 
+            alt={file.name} 
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
+          <span className="absolute top-1 left-1 sm:top-2 sm:left-2 bg-black/80 backdrop-blur-sm p-1 sm:p-1.5 rounded-lg">
+            <Image className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-white" />
+          </span>
+          <button onClick={(e) => handleDelete(file, e)} 
+            className="absolute top-1 right-1 sm:top-2 sm:right-2 p-1 sm:p-1.5 bg-red-500/90 hover:bg-red-600 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
+            <Trash2 className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-white" />
+          </button>
+        </div>
+        <div className={`mt-1.5 sm:mt-3 ${viewMode === 'list' ? 'max-w-2xl mx-auto w-full' : ''}`}>
+          <h3 className="text-xs sm:text-sm font-medium text-gray-900 line-clamp-2">{file.name}</h3>
+          <div className="flex flex-wrap items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1 text-[10px] sm:text-xs text-gray-500">
+            <span className="font-medium">{formatFileSize(file.size)}</span>
+            <span className="w-0.5 h-0.5 bg-gray-300 rounded-full" />
+            <span>{file.date ? new Date(file.date).toLocaleDateString() : 'Unknown'}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Audio Card Component
+  const AudioCard = ({ file }: { file: MediaFile }) => {
+    return (
+      <div className="group cursor-pointer" onClick={() => setSelectedFile(file)}>
+        <div className={`relative rounded-xl overflow-hidden bg-purple-50 ${viewMode === 'grid' ? 'aspect-video' : 'aspect-video max-w-2xl mx-auto'}`}>
+          <div className="w-full h-full flex flex-col items-center justify-center">
+            <Music className="w-8 h-8 sm:w-12 sm:h-12 text-purple-400" />
+            <span className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2 font-medium">AUDIO</span>
+          </div>
+          <span className="absolute top-1 left-1 sm:top-2 sm:left-2 bg-black/80 backdrop-blur-sm p-1 sm:p-1.5 rounded-lg">
+            <Music className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-white" />
+          </span>
+          <button onClick={(e) => handleDelete(file, e)} 
+            className="absolute top-1 right-1 sm:top-2 sm:right-2 p-1 sm:p-1.5 bg-red-500/90 hover:bg-red-600 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
+            <Trash2 className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-white" />
+          </button>
+        </div>
+        <div className={`mt-1.5 sm:mt-3 ${viewMode === 'list' ? 'max-w-2xl mx-auto w-full' : ''}`}>
+          <h3 className="text-xs sm:text-sm font-medium text-gray-900 line-clamp-2">{file.name}</h3>
+          <div className="flex flex-wrap items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1 text-[10px] sm:text-xs text-gray-500">
+            <span className="font-medium">{formatFileSize(file.size)}</span>
+            <span className="w-0.5 h-0.5 bg-gray-300 rounded-full" />
+            <span>{file.date ? new Date(file.date).toLocaleDateString() : 'Unknown'}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (loadingFiles) {
     return (
       <div className="min-h-screen bg-white">
@@ -655,32 +754,16 @@ export default function Home() {
                 ? 'grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4' 
                 : 'grid-cols-1'
             }`}>
-              {filteredFiles.map((file) => file.type === 'video' ? (
-                <VideoCard key={file.id || file.dbId} file={file} />
-              ) : (
-                <div key={file.id || file.dbId} className="group cursor-pointer" onClick={() => setSelectedFile(file)}>
-                  <div className={`relative rounded-xl overflow-hidden bg-gray-100 ${viewMode === 'grid' ? 'aspect-video' : 'aspect-video max-w-2xl mx-auto'}`}>
-                    {file.type === 'image' ? <img src={file.url} alt={file.name} className="w-full h-full object-cover" loading="lazy" /> : (
-                      <div className="w-full h-full flex flex-col items-center justify-center bg-purple-50">
-                        <Music className="w-8 h-8 sm:w-12 sm:h-12 text-purple-400" />
-                        <span className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2 font-medium">AUDIO</span>
-                      </div>
-                    )}
-                    <span className="absolute top-1 left-1 sm:top-2 sm:left-2 bg-black/80 backdrop-blur-sm p-1 sm:p-1.5 rounded-lg">
-                      {file.type === 'image' ? <Image className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-white" /> : <Music className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-white" />}
-                    </span>
-                    <button onClick={(e) => handleDelete(file, e)} className="absolute top-1 right-1 sm:top-2 sm:right-2 p-1 sm:p-1.5 bg-red-500/90 hover:bg-red-600 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-white" /></button>
-                  </div>
-                  <div className={`mt-1.5 sm:mt-3 ${viewMode === 'list' ? 'max-w-2xl mx-auto w-full' : ''}`}>
-                    <h3 className="text-xs sm:text-sm font-medium text-gray-900 line-clamp-2">{file.name}</h3>
-                    <div className="flex flex-wrap items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1 text-[10px] sm:text-xs text-gray-500">
-                      <span className="font-medium">{formatFileSize(file.size)}</span>
-                      <span className="w-0.5 h-0.5 bg-gray-300 rounded-full" />
-                      <span>{file.date ? new Date(file.date).toLocaleDateString() : 'Unknown'}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
+              {filteredFiles.map((file) => {
+                if (file.type === 'video') {
+                  return <VideoCard key={file.id || file.dbId} file={file} />;
+                } else if (file.type === 'image') {
+                  return <ImageCard key={file.id || file.dbId} file={file} />;
+                } else if (file.type === 'audio') {
+                  return <AudioCard key={file.id || file.dbId} file={file} />;
+                }
+                return null;
+              })}
             </div>
           </div>
         ) : (
