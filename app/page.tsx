@@ -1,6 +1,8 @@
 // page.tsx (Home component)
 'use client';
 
+export const dynamic = 'force-dynamic';
+
 import { useUser } from '@clerk/nextjs';
 import { useState, useRef, useEffect } from 'react';
 import {
