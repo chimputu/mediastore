@@ -1,16 +1,17 @@
-// page.tsx (Home component)
+// app/page.tsx
 'use client';
 
 export const dynamic = 'force-dynamic';
 
 import { useUser } from '@clerk/nextjs';
 import { useState, useRef, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import {
   Download, X, Play, FolderOpen, Image, Video, Copy, Check, Upload,
-  Music, ExternalLink, Volume2, VolumeX, Trash2, Share2, Clock
+  Music, ExternalLink, Volume2, VolumeX, Trash2, Share2, Clock, Loader2
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
-import { supabase } from '@/lib/supabase';
+import { supabase, isSupabaseAvailable } from '@/lib/supabase';
 
 interface MediaFile {
   url: string;
@@ -48,7 +49,7 @@ function LoadingScreen({ text }: { text: string }) {
         }
         return prev + 1;
       });
-    }, 100);
+    }, 80);
     return () => clearInterval(interval);
   }, [text]);
 
@@ -57,13 +58,13 @@ function LoadingScreen({ text }: { text: string }) {
       <div className="flex items-center gap-1 flex-wrap justify-center">
         {text.split('').map((char, index) => (
           <span key={index}
-            className={`text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold transition-all duration-400 ease-out ${
+            className={`text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold transition-all duration-300 ease-out ${
               index < visibleChars ? 'opacity-100 text-black' : 'opacity-0 text-gray-300'
             }`}
             style={{
               transform: index < visibleChars ? 'translate(0,0) scale(1) rotate(0deg)' : `translate(${index % 2 === 0 ? '-60px' : '60px'}, ${index % 3 === 0 ? '-30px' : '30px'}) scale(0.3) rotate(${index % 2 === 0 ? 180 : -180}deg)`,
-              transitionDelay: `${index * 30}ms`,
-              transitionDuration: '400ms'
+              transitionDelay: `${index * 20}ms`,
+              transitionDuration: '300ms'
             }}
           >
             {char === ' ' ? '\u00A0' : char}
@@ -104,15 +105,39 @@ export default function Home() {
   const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '';
 
   useEffect(() => {
-    if (user?.id) loadUserFiles();
+    if (user?.id) {
+      console.log('🔍 User detected, loading files...');
+      loadUserFiles();
+    }
   }, [user?.id]);
 
   const loadUserFiles = async () => {
     setLoadingFiles(true);
     try {
-      const { data, error } = await supabase.from('files').select('*').eq('user_id', user?.id).order('uploaded_at', { ascending: false });
-      if (error) { console.error('Error loading files:', error); setMediaFiles([]); }
-      else if (data) {
+      // Check if Supabase is available
+      if (!isSupabaseAvailable()) {
+        console.warn('⚠️ Supabase not available, using mock data');
+        setMediaFiles([]);
+        setLoadingFiles(false);
+        return;
+      }
+
+      console.log('📡 Fetching files for user:', user?.id);
+      const { data, error } = await supabase
+        .from('files')
+        .select('*')
+        .eq('user_id', user?.id)
+        .order('uploaded_at', { ascending: false });
+
+      if (error) {
+        console.error('❌ Error loading files:', error);
+        toast.error('Failed to load your files');
+        setMediaFiles([]);
+        return;
+      }
+
+      console.log(`✅ Loaded ${data?.length || 0} files`);
+      if (data) {
         const files: MediaFile[] = data.map((row: any) => ({
           url: row.file_url || '',
           type: getFileTypeFromName(row.file_name || ''),
@@ -125,25 +150,35 @@ export default function Home() {
         }));
         setMediaFiles(files);
       }
-    } catch (err) { console.error('Failed to load files:', err); setMediaFiles([]); }
-    setLoadingFiles(false);
+    } catch (err) {
+      console.error('❌ Failed to load files:', err);
+      toast.error('Failed to load your files');
+      setMediaFiles([]);
+    } finally {
+      setLoadingFiles(false);
+    }
   };
 
   const MAX_STORAGE = 500 * 1024 * 1024;
   const totalStorage = mediaFiles.reduce((total, file) => total + (file.size || 0), 0);
   const storagePercent = Math.round((totalStorage / MAX_STORAGE) * 100);
 
-  if (!isLoaded) return <div className="min-h-screen bg-white flex items-center justify-center p-4"><LoadingScreen text="MediaStore" /></div>;
-  if (!isSignedIn) return (
-    <div className="min-h-screen bg-white flex items-center justify-center p-4">
-      <div className="text-center">
-        <FolderOpen className="w-16 h-16 sm:w-20 sm:h-20 text-gray-300 mx-auto mb-4" />
-        <p className="text-lg sm:text-xl text-gray-600 mb-2">Welcome to MediaStore</p>
-        <p className="text-sm sm:text-base text-gray-400">Please sign in to continue</p>
-        <p className="text-xs text-gray-400 mt-4">Created by Kafiswe Chimputu Jr</p>
+  if (!isLoaded) {
+    return <div className="min-h-screen bg-white flex items-center justify-center p-4"><LoadingScreen text="MediaStore" /></div>;
+  }
+
+  if (!isSignedIn) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center p-4">
+        <div className="text-center">
+          <FolderOpen className="w-16 h-16 sm:w-20 sm:h-20 text-gray-300 mx-auto mb-4" />
+          <p className="text-lg sm:text-xl text-gray-600 mb-2">Welcome to MediaStore</p>
+          <p className="text-sm sm:text-base text-gray-400">Please sign in to continue</p>
+          <p className="text-xs text-gray-400 mt-4">Created by Kafiswe Chimputu Jr</p>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   const filteredFiles = mediaFiles.filter((file) => {
     const fileName = (file.name || '').toLowerCase();
@@ -157,10 +192,10 @@ export default function Home() {
   });
 
   const formatFileSize = (bytes?: number) => {
-    if (!bytes) return 'Unknown';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
   };
 
   const getFileIcon = (file: MediaFile) => {
@@ -179,29 +214,46 @@ export default function Home() {
   }
 
   const handleDownload = (url: string, fileName: string) => {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    link.target = '_blank';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('Download started');
+    } catch (error) {
+      toast.error('Failed to download');
+    }
   };
 
   const handleDelete = async (file: MediaFile, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`Delete "${file.name}"?`)) return;
+    
+    if (!isSupabaseAvailable()) {
+      toast.error('Database connection not available');
+      return;
+    }
+
     if (file.dbId) {
       const { error } = await supabase.from('files').delete().eq('id', file.dbId);
-      if (error) { console.error('Delete error:', error); alert('Failed to delete file'); return; }
+      if (error) {
+        console.error('Delete error:', error);
+        toast.error('Failed to delete file');
+        return;
+      }
     }
     setMediaFiles(prev => prev.filter(f => f.id !== file.id));
     if (selectedFile?.id === file.id) setSelectedFile(null);
+    toast.success('File deleted');
   };
 
   const handleCopyUrl = (url: string) => {
     navigator.clipboard.writeText(url);
     setCopied(true);
+    toast.success('URL copied!');
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -235,20 +287,40 @@ export default function Home() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Check if Supabase is available
+    if (!isSupabaseAvailable()) {
+      toast.error('Database connection is not available. Please try again later.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
-    if (!cloudName) { alert('Cloudinary not configured.'); return; }
-    if (totalStorage + file.size > MAX_STORAGE) { alert('Storage limit reached!'); if (fileInputRef.current) fileInputRef.current.value = ''; return; }
+    if (!cloudName) { 
+      toast.error('Cloudinary not configured');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (totalStorage + file.size > MAX_STORAGE) { 
+      toast.error('Storage limit reached!');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setUploading(true);
     setUploadProgress(0);
     const formData = new FormData();
     formData.append('file', file);
     formData.append('upload_preset', 'myapp_upload_sync');
+
     try {
       const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/upload`;
       const xhr = new XMLHttpRequest();
       xhr.upload.addEventListener('progress', (event) => {
         if (event.lengthComputable) setUploadProgress(Math.round((event.loaded / event.total) * 100));
       });
+
       const response: any = await new Promise((resolve, reject) => {
         xhr.addEventListener('load', () => {
           if (xhr.status >= 200 && xhr.status < 300) {
@@ -260,31 +332,60 @@ export default function Home() {
         xhr.open('POST', uploadUrl);
         xhr.send(formData);
       });
+
       if (response.error) throw new Error(response.error.message || 'Cloudinary error');
+      
       let fileUrl = response.secure_url || response.url;
       let publicId = response.public_id;
       let format = response.format || file.name.split('.').pop() || '';
+      
       if (!fileUrl) {
         if (publicId) {
           const resourceType = response.resource_type || 'image';
           fileUrl = `https://res.cloudinary.com/${cloudName}/${resourceType}/upload/${publicId}.${format}`;
         } else { throw new Error('Could not determine file URL'); }
       }
+
       const originalName = response.original_filename || file.name.replace(/\.[^.]+$/, '') || 'unnamed';
       const fileType = getFileTypeFromName(originalName + '.' + format);
+
       const { data: dbData, error: dbError } = await supabase.from('files').insert({
-        user_id: user?.id, cloudinary_id: publicId || 'unknown', file_name: originalName,
-        file_url: fileUrl, file_type: fileType, file_size: response.bytes || file.size || 0, format: format,
+        user_id: user?.id,
+        cloudinary_id: publicId || 'unknown',
+        file_name: originalName,
+        file_url: fileUrl,
+        file_type: fileType,
+        file_size: response.bytes || file.size || 0,
+        format: format,
       }).select().single();
-      if (dbError) { console.error('Supabase error:', dbError); throw new Error('Failed to save file to database'); }
+
+      if (dbError) { 
+        console.error('Supabase error:', dbError); 
+        throw new Error('Failed to save file to database');
+      }
+
       const newFile: MediaFile = {
-        url: fileUrl, type: fileType, name: originalName, id: publicId || '',
-        size: response.bytes || file.size || 0, date: response.created_at || new Date().toISOString(),
-        format: format, dbId: dbData?.id || '',
+        url: fileUrl,
+        type: fileType,
+        name: originalName,
+        id: publicId || '',
+        size: response.bytes || file.size || 0,
+        date: response.created_at || new Date().toISOString(),
+        format: format,
+        dbId: dbData?.id || '',
       };
+
       setMediaFiles(prev => [newFile, ...prev]);
-    } catch (err: any) { console.error('Upload error:', err.message || err); alert(`Upload failed: ${err.message || 'Unknown error'}`); }
-    finally { setUploading(false); setUploadProgress(0); if (fileInputRef.current) fileInputRef.current.value = ''; }
+      toast.success('Upload complete!');
+      
+    } catch (err: any) {
+      console.error('Upload error:', err.message || err);
+      toast.error(`Upload failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const tabs = [
@@ -321,7 +422,6 @@ export default function Home() {
       videoRefs.current[file.id] = videoRef.current;
     }, [file.id]);
 
-    // For mobile: auto-play on click instead of hover
     const handleMobileClick = () => {
       if (isMobile) {
         const video = videoRefs.current[file.id];
@@ -353,9 +453,7 @@ export default function Home() {
           <video 
             ref={videoRef}
             src={file.url}
-            className={`w-full h-full object-cover transition-all duration-500 ${
-              isHovered ? 'opacity-100 scale-100' : 'opacity-100 scale-100'
-            }`}
+            className="w-full h-full object-cover"
             muted={videoMuted[file.id] !== false}
             loop 
             playsInline 
@@ -480,7 +578,7 @@ export default function Home() {
           {uploading ? (
             <div className="bg-gray-50 rounded-2xl p-6 sm:p-8 text-center border-2 border-dashed border-gray-200">
               <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3 sm:mb-4">
-                <Upload className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400 animate-bounce" />
+                <Loader2 className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400 animate-spin" />
               </div>
               <h2 className="text-base sm:text-lg font-semibold text-gray-700 mb-2">Uploading...</h2>
               <div className="max-w-xs sm:max-w-md mx-auto">
