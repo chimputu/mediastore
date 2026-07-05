@@ -11,7 +11,7 @@ import {
   Music, ExternalLink, Volume2, VolumeX, Trash2, Share2, Clock, Loader2
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
-import { supabase, isSupabaseAvailable } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 interface MediaFile {
   url: string;
@@ -106,7 +106,6 @@ export default function Home() {
 
   useEffect(() => {
     if (user?.id) {
-      console.log('🔍 User detected, loading files...');
       loadUserFiles();
     }
   }, [user?.id]);
@@ -114,15 +113,6 @@ export default function Home() {
   const loadUserFiles = async () => {
     setLoadingFiles(true);
     try {
-      // Check if Supabase is available
-      if (!isSupabaseAvailable()) {
-        console.warn('⚠️ Supabase not available, using mock data');
-        setMediaFiles([]);
-        setLoadingFiles(false);
-        return;
-      }
-
-      console.log('📡 Fetching files for user:', user?.id);
       const { data, error } = await supabase
         .from('files')
         .select('*')
@@ -130,13 +120,12 @@ export default function Home() {
         .order('uploaded_at', { ascending: false });
 
       if (error) {
-        console.error('❌ Error loading files:', error);
+        console.error('Error loading files:', error);
         toast.error('Failed to load your files');
         setMediaFiles([]);
         return;
       }
 
-      console.log(`✅ Loaded ${data?.length || 0} files`);
       if (data) {
         const files: MediaFile[] = data.map((row: any) => ({
           url: row.file_url || '',
@@ -151,7 +140,7 @@ export default function Home() {
         setMediaFiles(files);
       }
     } catch (err) {
-      console.error('❌ Failed to load files:', err);
+      console.error('Failed to load files:', err);
       toast.error('Failed to load your files');
       setMediaFiles([]);
     } finally {
@@ -231,11 +220,6 @@ export default function Home() {
   const handleDelete = async (file: MediaFile, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`Delete "${file.name}"?`)) return;
-    
-    if (!isSupabaseAvailable()) {
-      toast.error('Database connection not available');
-      return;
-    }
 
     if (file.dbId) {
       const { error } = await supabase.from('files').delete().eq('id', file.dbId);
@@ -288,21 +272,14 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check if Supabase is available
-    if (!isSupabaseAvailable()) {
-      toast.error('Database connection is not available. Please try again later.');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
     const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
-    if (!cloudName) { 
+    if (!cloudName) {
       toast.error('Cloudinary not configured');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
-    if (totalStorage + file.size > MAX_STORAGE) { 
+    if (totalStorage + file.size > MAX_STORAGE) {
       toast.error('Storage limit reached!');
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
@@ -310,79 +287,85 @@ export default function Home() {
 
     setUploading(true);
     setUploadProgress(0);
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('upload_preset', 'myapp_upload_sync');
 
     try {
       const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/upload`;
-      const xhr = new XMLHttpRequest();
-      xhr.upload.addEventListener('progress', (event) => {
-        if (event.lengthComputable) setUploadProgress(Math.round((event.loaded / event.total) * 100));
+      console.log('📤 Uploading to Cloudinary...');
+
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        body: formData,
       });
 
-      const response: any = await new Promise((resolve, reject) => {
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try { resolve(JSON.parse(xhr.responseText)); } catch (e) { reject(new Error('Invalid JSON response')); }
-          } else { reject(new Error(`HTTP ${xhr.status}`)); }
-        });
-        xhr.addEventListener('error', () => reject(new Error('Network error')));
-        xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
-        xhr.open('POST', uploadUrl);
-        xhr.send(formData);
-      });
+      const data = await response.json();
+      console.log('📡 Cloudinary Response:', data);
 
-      if (response.error) throw new Error(response.error.message || 'Cloudinary error');
-      
-      let fileUrl = response.secure_url || response.url;
-      let publicId = response.public_id;
-      let format = response.format || file.name.split('.').pop() || '';
-      
-      if (!fileUrl) {
-        if (publicId) {
-          const resourceType = response.resource_type || 'image';
-          fileUrl = `https://res.cloudinary.com/${cloudName}/${resourceType}/upload/${publicId}.${format}`;
-        } else { throw new Error('Could not determine file URL'); }
+      if (data.error) {
+        throw new Error(data.error.message || 'Cloudinary error');
       }
 
-      const originalName = response.original_filename || file.name.replace(/\.[^.]+$/, '') || 'unnamed';
+      let fileUrl = data.secure_url || data.url;
+      let publicId = data.public_id;
+      let format = data.format || file.name.split('.').pop() || '';
+
+      // If no fileUrl, try to construct it
+      if (!fileUrl && publicId) {
+        const resourceType = data.resource_type || 'image';
+        fileUrl = `https://res.cloudinary.com/${cloudName}/${resourceType}/upload/${publicId}.${format}`;
+      }
+
+      if (!fileUrl) {
+        throw new Error('Could not determine file URL');
+      }
+
+      console.log('📍 File URL:', fileUrl);
+
+      const originalName = data.original_filename || file.name.replace(/\.[^.]+$/, '') || 'unnamed';
       const fileType = getFileTypeFromName(originalName + '.' + format);
 
-      const { data: dbData, error: dbError } = await supabase.from('files').insert({
-        user_id: user?.id,
-        cloudinary_id: publicId || 'unknown',
-        file_name: originalName,
-        file_url: fileUrl,
-        file_type: fileType,
-        file_size: response.bytes || file.size || 0,
-        format: format,
-      }).select().single();
+      // Save to Supabase
+      const { data: dbData, error: dbError } = await supabase
+        .from('files')
+        .insert({
+          user_id: user?.id,
+          cloudinary_id: publicId || 'unknown',
+          file_name: originalName,
+          file_url: fileUrl,
+          file_type: fileType,
+          file_size: data.bytes || file.size || 0,
+          format: format,
+        })
+        .select()
+        .single();
 
-      if (dbError) { 
-        console.error('❌ Supabase insert error:', dbError); 
+      if (dbError) {
+        console.error('❌ Supabase error:', dbError);
         toast.error('Failed to save file to database');
-        throw new Error('Failed to save file to database');
+        return;
       }
 
-      console.log('✅ Supabase insert successful:', dbData);
+      console.log('✅ File saved to Supabase:', dbData);
 
       const newFile: MediaFile = {
         url: fileUrl,
         type: fileType,
         name: originalName,
         id: publicId || '',
-        size: response.bytes || file.size || 0,
-        date: response.created_at || new Date().toISOString(),
+        size: data.bytes || file.size || 0,
+        date: data.created_at || new Date().toISOString(),
         format: format,
         dbId: dbData?.id || '',
       };
 
       setMediaFiles(prev => [newFile, ...prev]);
       toast.success('Upload complete!');
-      
+
     } catch (err: any) {
-      console.error('Upload error:', err.message || err);
+      console.error('❌ Upload error:', err);
       toast.error(`Upload failed: ${err.message || 'Unknown error'}`);
     } finally {
       setUploading(false);
@@ -405,13 +388,12 @@ export default function Home() {
     audio: mediaFiles.filter(f => f.type === 'audio').length,
   };
 
-  // Video Card with preview - responsive
   const VideoCard = ({ file }: { file: MediaFile }) => {
     const isHovered = hoveredVideo === file.id;
     const duration = videoDuration[file.id] || '0:00';
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isMobile, setIsMobile] = useState(false);
-    
+
     useEffect(() => {
       const checkMobile = () => {
         setIsMobile(window.innerWidth < 768);
@@ -440,7 +422,7 @@ export default function Home() {
     };
 
     return (
-      <div 
+      <div
         className="group cursor-pointer"
         onMouseEnter={() => !isMobile && handleVideoHover(file.id)}
         onMouseLeave={() => !isMobile && handleVideoLeave(file.id)}
@@ -453,35 +435,31 @@ export default function Home() {
         }}
       >
         <div className="relative rounded-xl overflow-hidden bg-gray-900 aspect-video">
-          <video 
+          <video
             ref={videoRef}
             src={file.url}
             className="w-full h-full object-cover"
             muted={videoMuted[file.id] !== false}
-            loop 
-            playsInline 
+            loop
+            playsInline
             preload="metadata"
           />
-          
+
           {!isHovered && duration !== '0:00' && (
             <span className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 bg-black/90 text-white text-[10px] sm:text-xs px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-md font-medium">
               {duration}
             </span>
           )}
-          
-          <div className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${
-            isHovered ? 'opacity-0 scale-75' : 'opacity-100 scale-100'
-          }`}>
+
+          <div className={`absolute inset-0 flex items-center justify-center transition-all duration-300 ${isHovered ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`}>
             <div className="w-12 h-12 sm:w-16 sm:h-16 bg-black/60 rounded-full flex items-center justify-center group-hover:bg-black/80 group-hover:scale-110 transition-all duration-300">
               <Play className="w-5 h-5 sm:w-7 sm:h-7 text-white ml-0.5 sm:ml-1" fill="white" />
             </div>
           </div>
-          
-          <div className={`absolute bottom-0 left-0 right-0 p-2 sm:p-4 bg-gradient-to-t from-black/90 to-transparent transition-all duration-300 ${
-            isHovered ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
-          }`}>
+
+          <div className={`absolute bottom-0 left-0 right-0 p-2 sm:p-4 bg-gradient-to-t from-black/90 to-transparent transition-all duration-300 ${isHovered ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
             <div className="flex items-center justify-between gap-2 sm:gap-4">
-              <button onClick={(e) => { e.stopPropagation(); toggleMute(file.id, e); }} 
+              <button onClick={(e) => { e.stopPropagation(); toggleMute(file.id, e); }}
                 className="p-1.5 sm:p-2 hover:bg-white/20 rounded-full transition-colors">
                 {videoMuted[file.id] !== false ? <VolumeX className="w-4 h-4 sm:w-5 sm:h-5 text-white" /> : <Volume2 className="w-4 h-4 sm:w-5 sm:h-5 text-white" />}
               </button>
@@ -491,17 +469,17 @@ export default function Home() {
               <span className="text-[8px] sm:text-[10px] text-white/90 font-medium">HD</span>
             </div>
           </div>
-          
+
           <span className="absolute top-2 left-2 sm:top-3 sm:left-3 bg-red-500/90 text-white text-[8px] sm:text-[10px] px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-md font-medium flex items-center gap-0.5 sm:gap-1">
             <Video className="w-2 h-2 sm:w-3 sm:h-3" /> <span className="hidden xs:inline">VIDEO</span>
           </span>
-          
+
           <button onClick={(e) => { e.stopPropagation(); handleDelete(file, e); }}
             className="absolute top-2 right-2 sm:top-3 sm:right-3 p-1 sm:p-1.5 bg-red-500/90 hover:bg-red-600 rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200">
             <Trash2 className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-white" />
           </button>
         </div>
-        
+
         <div className="mt-2 sm:mt-3">
           <h3 className="text-xs sm:text-sm font-medium text-gray-900 line-clamp-2">{file.name}</h3>
           <div className="flex flex-wrap items-center gap-1 sm:gap-2 mt-1 text-[10px] sm:text-xs text-gray-500">
@@ -511,11 +489,11 @@ export default function Home() {
             {duration !== '0:00' && <><span className="w-0.5 h-0.5 bg-gray-300 rounded-full" /><span className="flex items-center gap-0.5"><Clock className="w-2.5 h-2.5 sm:w-3 sm:h-3" /> {duration}</span></>}
           </div>
           <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-1.5 sm:mt-2">
-            <button onClick={(e) => { e.stopPropagation(); handleDownload(file.url, file.name); }} 
+            <button onClick={(e) => { e.stopPropagation(); handleDownload(file.url, file.name); }}
               className="text-[10px] sm:text-xs text-gray-600 hover:text-black transition-colors flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg hover:bg-gray-100">
               <Download className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> <span className="hidden xs:inline">Download</span>
             </button>
-            <button onClick={(e) => { e.stopPropagation(); handleCopyUrl(file.url); }} 
+            <button onClick={(e) => { e.stopPropagation(); handleCopyUrl(file.url); }}
               className="text-[10px] sm:text-xs text-gray-600 hover:text-black transition-colors flex items-center gap-1 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg hover:bg-gray-100">
               <Share2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> <span className="hidden xs:inline">Share</span>
             </button>
@@ -539,6 +517,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-white flex flex-col">
       <Navbar onUpload={handleUpload} uploading={uploading} searchQuery={searchQuery} onSearchChange={setSearchQuery} viewMode={viewMode} onViewModeChange={setViewMode} />
+
       <div className="flex-1 max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 sm:mb-6 gap-2 sm:gap-0">
           <div>
@@ -551,7 +530,7 @@ export default function Home() {
             <span>{formatFileSize(totalStorage)} used</span>
           </div>
         </div>
-        
+
         <div className="mb-4 sm:mb-6 bg-gray-50 rounded-xl p-2 sm:p-3 border border-gray-100">
           <div className="flex items-center justify-between mb-1 sm:mb-1.5">
             <span className="text-[10px] sm:text-xs text-gray-500">Storage</span>
@@ -565,9 +544,7 @@ export default function Home() {
         <div className="flex items-center gap-0.5 sm:gap-1 mb-4 sm:mb-6 overflow-x-auto pb-1">
           {tabs.map((tab) => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-1 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-full text-[10px] sm:text-sm font-medium transition-all whitespace-nowrap ${
-                activeTab === tab.id ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'
-              }`}>
+              className={`flex items-center gap-1 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-full text-[10px] sm:text-sm font-medium transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
               <tab.icon className="w-3 h-3 sm:w-4 sm:h-4" />
               <span className="hidden xs:inline">{tab.label}</span>
               <span className="text-[8px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded-full bg-white/20 text-white">
@@ -618,8 +595,8 @@ export default function Home() {
               <div className="bg-gray-50 rounded-2xl p-6 sm:p-8 text-center border-2 border-dashed border-gray-200 hover:border-black hover:bg-gray-100 transition-all group">
                 <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-3 sm:mb-4 group-hover:bg-black transition-colors">
                   {activeTab === 'images' ? <Image className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400 group-hover:text-white transition-colors" /> :
-                   activeTab === 'videos' ? <Video className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400 group-hover:text-white transition-colors" /> :
-                   <Music className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400 group-hover:text-white transition-colors" />}
+                    activeTab === 'videos' ? <Video className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400 group-hover:text-white transition-colors" /> :
+                      <Music className="w-6 h-6 sm:w-8 sm:h-8 text-gray-400 group-hover:text-white transition-colors" />}
                 </div>
                 <h2 className="text-base sm:text-lg font-semibold text-gray-700 mb-1 sm:mb-2">Upload {activeTab}</h2>
                 <p className="text-xs sm:text-sm text-gray-400">{activeTab === 'images' ? 'JPG, PNG, GIF, WebP, SVG' : activeTab === 'videos' ? 'MP4, MOV, WebM, AVI' : 'MP3, WAV, AAC, FLAC'}</p>
@@ -635,11 +612,7 @@ export default function Home() {
               <h2 className="text-base sm:text-lg font-semibold text-black">{searchQuery ? `Results for "${searchQuery}"` : 'All Media'}</h2>
               <span className="text-xs sm:text-sm text-gray-400">{filteredFiles.length} files</span>
             </div>
-            <div className={`grid gap-2 sm:gap-3 md:gap-4 ${
-              viewMode === 'grid' 
-                ? 'grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4' 
-                : 'grid-cols-1'
-            }`}>
+            <div className={`grid gap-2 sm:gap-3 md:gap-4 ${viewMode === 'grid' ? 'grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4' : 'grid-cols-1'}`}>
               {filteredFiles.map((file) => file.type === 'video' ? (
                 <VideoCard key={file.id || file.dbId} file={file} />
               ) : (
